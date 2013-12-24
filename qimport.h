@@ -51,6 +51,7 @@ struct dng {
 	u32 raw_size;
 	u32 jpeg_pos;
 	u32 jpeg_size;
+	u32 comp;
 };
 
 void emit_count(DNG *dng, uint bitcnt, u16 value);
@@ -60,3 +61,4 @@ void emit_bit(DNG *dng, u8 bit);
 void build_huff(DNG *dng);
 void dng_putc(DNG *dng, u8 c);
 void ljpeg_huff(DNG *dng);
+int decompress(const u8 *ljpeg, u32 ljpeg_size, u8 *dest, u32 dest_size, u16 width, u16 height);

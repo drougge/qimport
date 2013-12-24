@@ -57,11 +57,11 @@ static const u16 huff_bits_[BPS + 1] = {
                                         0b11111110,
                                         0b111111110,
                                         0b1111111110,
-                                        0b11111111110,
+                                        0b1111111111,
                                        };
 static u16 huff_bits[BPS + 1];
 static const int huff_lens_[BPS + 1] = {
-	2, 2, 3, 3, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+	2, 2, 3, 3, 3, 4, 5, 6, 7, 8, 9, 10, 10,
 };
 static int huff_lens[BPS + 1];
 

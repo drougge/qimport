@@ -26,6 +26,11 @@ static void dng_putstr(DNG *dng, const char *s, int count)
 	while (count--) dng_putc(dng, *(s++));
 }
 
+static u8 get8(DNG *dng)
+{
+	return dng->data[dng->off++];
+}
+
 static u16 be_get16(DNG *dng)
 {
 	dng->off += 2;
@@ -191,26 +196,21 @@ err:
 	dng->err = 1;
 }
 
-static int dng_open(DNG *dng, const char *fn)
+static void dng_close(DNG *dng)
 {
-	memset(dng, 0, sizeof(*dng));
-	FILE *fh = fopen(fn, "rb");
-	u8 *data = NULL;
-	err1(!fh);
-	struct stat sb;
-	err1(fstat(fileno(fh), &sb));
-	err1(!S_ISREG(sb.st_mode));
-	dng->size = sb.st_size;
-	data = malloc(dng->size);
-	err1(fread(data, dng->size, 1, fh) != 1);
-	fclose(fh);
-	fh = NULL;
-	if (!memcmp(data, "II*\0", 4)) {
+	if (dng->data) free(dng->data);
+	if (dng->outdata) free(dng->outdata);
+	dng->data = dng->outdata = NULL;
+}
+
+static int dng_open_common(DNG *dng)
+{
+	if (!memcmp(dng->data, "II*\0", 4)) {
 		dng->get16 = le_get16;
 		dng->get32 = le_get32;
 		dng->put16 = le_put16;
 		dng->put32 = le_put32;
-	} else if (memcmp(data, "MM\0*", 4)) {
+	} else if (memcmp(dng->data, "MM\0*", 4)) {
 		dng->get16 = be_get16;
 		dng->get32 = be_get32;
 		dng->put16 = be_put16;
@@ -218,7 +218,6 @@ static int dng_open(DNG *dng, const char *fn)
 	} else {
 		goto err;
 	}
-	dng->data = data;
 	dng->off = 4;
 	dng->ifd[0] = dng->get32(dng);
 	dng->ifd[1] = dng_readtag(dng, 0, 0x14a, 0, 0);
@@ -231,23 +230,102 @@ static int dng_open(DNG *dng, const char *fn)
 	dng->jpeg_pos = dng_readtag(dng, 2, 273, 0, 0);
 	dng->jpeg_size = dng_readtag(dng, 2, 279, 0, 0);
 	err1(dng->jpeg_pos + dng->jpeg_size != dng->size);
-	err1(dng->raw_pos + dng->raw_size != dng->jpeg_pos);
-	err1(dng_readtag(dng, 1, 259, 0, 0) != 1); // uncompressed
 	err1(dng_readtag(dng, 1, 262, 0, 0) != 32803); // PhotometricInterpretation CFA
 	err1(dng_readtag(dng, 1, 258, 0, 0) != 12); // only handles 12 bits per sample
-	err1(dng->width * dng->height * 12 / 8 != dng->raw_size);
 	err1(dng->err);
 	return 0;
 err:
-	if (fh) fclose(fh);
-	if (data) free(data);
+	dng->err = 1;
 	return 1;
 }
 
-static void dng_close(DNG *dng)
+static int dng_open_orig(DNG *dng, const char *fn)
 {
-	if (dng->data) free(dng->data);
-	if (dng->outdata) free(dng->outdata);
+	memset(dng, 0, sizeof(*dng));
+	FILE *fh = fopen(fn, "rb");
+	err1(!fh);
+	struct stat sb;
+	err1(fstat(fileno(fh), &sb));
+	err1(!S_ISREG(sb.st_mode));
+	dng->size = sb.st_size;
+	dng->data = malloc(dng->size);
+	err1(fread(dng->data, dng->size, 1, fh) != 1);
+	fclose(fh);
+	fh = NULL;
+	err1(dng_open_common(dng));
+	err1(dng_readtag(dng, 1, 259, 0, 0) != 1); // uncompressed
+	err1(dng->width * dng->height * 12 / 8 != dng->raw_size);
+	err1(dng->raw_pos + dng->raw_size != dng->jpeg_pos);
+	return 0;
+err:
+	if (fh) fclose(fh);
+	dng->err = 1;
+	dng_close(dng);
+	return 1;
+}
+
+static int dng_open_imported(DNG *dng, const u8 *data, u32 size)
+{
+	memset(dng, 0, sizeof(*dng));
+	u8 *orig = NULL;
+	dng->data = malloc(size);
+	err1(!dng->data);
+	memcpy(dng->data, data, size);
+	dng->size = size;
+	err1(dng_open_common(dng));
+	u32 comp = dng_readtag(dng, 1, 259, 0, 0);
+	dng->off = dng->raw_pos + dng->raw_size;
+	err1(memcmp(data + dng->off, QIMPORT_ID, strlen(QIMPORT_ID) + 1));
+	dng->off += strlen(QIMPORT_ID) + 1;
+	const u8 *md5 = data + dng->off;
+	dng->off += 16;
+	int fieldcount = dng->get16(dng);
+	for (int i = 0; i < fieldcount; i++) {
+		u8  ifd   = get8(dng);
+		err1(ifd > 3);
+		u16 tag   = dng->get16(dng);
+		u16 type  = dng->get16(dng);
+		u8  bytes = get8(dng);
+		u16 type2;
+		u32 saved_off = dng->off;
+		u32 off = dng_readtag(dng, ifd, tag, -1, &type2);
+		err1(off == 0);
+		err1(type != type2);
+		err1(off > dng->raw_pos);
+		memcpy(dng->data + off, dng->data + saved_off, bytes);
+		dng->off = saved_off + bytes;
+	}
+	err1(dng->off != dng->jpeg_pos);
+	u32 orig_size = dng_readtag(dng, 2, 273, 0, 0) + dng->jpeg_size;
+	u32 uncompressed_size = dng->width * dng->height * 12 / 8;
+	err1(uncompressed_size != dng_readtag(dng, 1, 279, 0, 0));
+	err1(orig_size != dng->raw_pos + uncompressed_size + dng->jpeg_size);
+	err1(dng->err);
+	orig = malloc(orig_size);
+	err1(!orig);
+	memcpy(orig, dng->data, dng->raw_pos);
+	memcpy(orig + orig_size - dng->jpeg_size, dng->data + dng->jpeg_pos, dng->jpeg_size);
+	if (comp == 1) { // uncompressed
+		err1(uncompressed_size != dng->raw_size);
+		memcpy(orig + dng->raw_pos, dng->data + dng->raw_pos, dng->raw_size);
+	} else if (comp == 7) { // ljpeg
+		err1(decompress(dng->data + dng->raw_pos, dng->raw_size, orig + dng->raw_pos, uncompressed_size, dng->width, dng->height));
+	} else {
+		goto err;
+	}
+	free(dng->data);
+	dng->data = orig;
+	orig = NULL;
+	dng->size = orig_size;
+	u8 curr_md5[16];
+	MD5(dng->data, dng->size, curr_md5);
+	err1(memcmp(md5, curr_md5, 16));
+	return 0;
+err:
+	dng->err = 1;
+	dng_close(dng);
+	if (orig) free(orig);
+	return 1;
 }
 
 typedef struct savefield {
@@ -321,7 +399,7 @@ static void ljpeg_tail(DNG *dng)
 int main(void)
 {
 	DNG dng;
-	err1(dng_open(&dng, "/r/cam/20131125/IMGP2573.DNG"));
+	err1(dng_open_orig(&dng, "/r/cam/20131125/IMGP2573.DNG"));
 	dng_extra(&dng);
 	err1(dng.err);
 	dng.put8 = dng_putc;
@@ -357,12 +435,11 @@ int main(void)
 	memcpy(dest + dng.raw_pos + image_size, dng.extradata, dng.extradata_pos);
 	memcpy(dest + dng.raw_pos + image_size + dng.extradata_pos, dng.data + dng.jpeg_pos, dng.jpeg_size);
 	dng_close(&dng);
+	err1(dng_open_imported(&dng, dest, dest_size));
+	dng_close(&dng);
 	FILE *fh = fopen("out.dng", "wb");
-	err1(fwrite(dest, dest_size, 1, fh) != dest_size);
+	err1(fwrite(dest, dest_size, 1, fh) != 1);
 	fclose(fh);
-			fh = fopen("out.data", "wb");
-			fwrite(dng.extradata, dng.extradata_pos, 1, fh);
-			fclose(fh);
 	return 0;
 err:
 	return 1;
