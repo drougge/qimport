@@ -1,9 +1,5 @@
 #include "qimport.h"
 
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <openssl/md5.h>
 
 #define OUTDATA_CHUNKSIZE (4 * 1024 * 1024)
@@ -239,26 +235,68 @@ err:
 	return 1;
 }
 
-int dng_open_orig(DNG *dng, const char *fn)
+typedef struct savefield {
+	u8  ifd;
+	u16 tag;
+	u16 type;
+	u8  bytes;
+} SAVEFIELD;
+
+SAVEFIELD savefields[] = {
+	{1,    259, 3, 2}, // compression
+	{1,    279, 4, 4}, // raw size
+	{2,    273, 4, 4}, // jpeg pos
+	// and some more that seem likely to be changed later
+	{3, 0x829d, 5, 8}, // FNum
+	{3, 0x920a, 5, 8}, // FL
+	{3, 0xa405, 3, 2}, // FL135
+	{0, 0x0112, 3, 2}, // Orientation
+};
+
+static int dng_extra(DNG *dng)
+{
+	int fieldcount = sizeof(savefields) / sizeof(*savefields);
+	dng->extradata_pos = strlen(QIMPORT_ID) + 1;
+	assert(dng->extradata_pos < sizeof(dng->extradata));
+	memcpy(dng->extradata, QIMPORT_ID, dng->extradata_pos);
+	MD5(dng->data, dng->size, dng->extradata + dng->extradata_pos);
+	dng->extradata_pos += 16;
+	assert(dng->extradata_pos < sizeof(dng->extradata));
+	dng->put8 = dng_put8_extradata;
+	dng->put16(dng, fieldcount);
+	SAVEFIELD *sf;
+	for (int i = 0; i < fieldcount; i++) {
+		sf = &savefields[i];
+		u16 type = 0;
+		u32 off = dng_readtag(dng, sf->ifd, sf->tag, -1, &type);
+		err1(type != sf->type);
+		dng->put8(dng, sf->ifd);
+		dng->put16(dng, sf->tag);
+		dng->put16(dng, sf->type);
+		dng->put8(dng, sf->bytes);
+		assert(dng->extradata_pos + sf->bytes <= sizeof(dng->extradata));
+		memcpy(dng->extradata + dng->extradata_pos, dng->data + off, sf->bytes);
+		dng->extradata_pos += sf->bytes;
+	}
+	return 0;
+err:
+	fprintf(stderr, "Failed to read tag %d:%d\n", sf->ifd, sf->tag);
+	dng->err = 1;
+	return 1;
+}
+
+int dng_open_orig(DNG *dng, u8 *data, u32 size)
 {
 	memset(dng, 0, sizeof(*dng));
-	FILE *fh = fopen(fn, "rb");
-	err1(!fh);
-	struct stat sb;
-	err1(fstat(fileno(fh), &sb));
-	err1(!S_ISREG(sb.st_mode));
-	dng->size = sb.st_size;
-	dng->data = malloc(dng->size);
-	err1(fread(dng->data, dng->size, 1, fh) != 1);
-	fclose(fh);
-	fh = NULL;
+	dng->data = data;
+	dng->size = size;
 	err1(dng_open_common(dng));
 	err1(dng_readtag(dng, 1, 259, 0, 0) != 1); // uncompressed
 	err1(dng->width * dng->height * 12 / 8 != dng->raw_size);
 	err1(dng->raw_pos + dng->raw_size != dng->jpeg_pos);
+	err1(dng_extra(dng));
 	return 0;
 err:
-	if (fh) fclose(fh);
 	dng->err = 1;
 	dng_close(dng);
 	return 1;
@@ -275,7 +313,7 @@ int dng_open_imported(DNG *dng, const u8 *data, u32 size)
 	err1(dng_open_common(dng));
 	u32 comp = dng_readtag(dng, 1, 259, 0, 0);
 	dng->off = dng->raw_pos + dng->raw_size;
-	err1(memcmp(data + dng->off, QIMPORT_ID, strlen(QIMPORT_ID) + 1));
+	err1(memcmp(data + dng->off, QIMPORT_ID, QIMPORT_ID_CHECKLEN));
 	dng->off += strlen(QIMPORT_ID) + 1;
 	const u8 *md5 = data + dng->off;
 	dng->off += 16;
@@ -326,55 +364,6 @@ err:
 	dng_close(dng);
 	if (orig) free(orig);
 	return 1;
-}
-
-typedef struct savefield {
-	u8  ifd;
-	u16 tag;
-	u16 type;
-	u8  bytes;
-} SAVEFIELD;
-
-SAVEFIELD savefields[] = {
-	{1,    259, 3, 2}, // compression
-	{1,    279, 4, 4}, // raw size
-	{2,    273, 4, 4}, // jpeg pos
-	// and some more that seem likely to be changed later
-	{3, 0x829d, 5, 8}, // FNum
-	{3, 0x920a, 5, 8}, // FL
-	{3, 0xa405, 3, 2}, // FL135
-	{0, 0x0112, 3, 2}, // Orientation
-};
-
-void dng_extra(DNG *dng)
-{
-	int fieldcount = sizeof(savefields) / sizeof(*savefields);
-	dng->extradata_pos = strlen(QIMPORT_ID) + 1;
-	assert(dng->extradata_pos < sizeof(dng->extradata));
-	memcpy(dng->extradata, QIMPORT_ID, dng->extradata_pos);
-	MD5(dng->data, dng->size, dng->extradata + dng->extradata_pos);
-	dng->extradata_pos += 16;
-	assert(dng->extradata_pos < sizeof(dng->extradata));
-	dng->put8 = dng_put8_extradata;
-	dng->put16(dng, fieldcount);
-	SAVEFIELD *sf;
-	for (int i = 0; i < fieldcount; i++) {
-		sf = &savefields[i];
-		u16 type = 0;
-		u32 off = dng_readtag(dng, sf->ifd, sf->tag, -1, &type);
-		err1(type != sf->type);
-		dng->put8(dng, sf->ifd);
-		dng->put16(dng, sf->tag);
-		dng->put16(dng, sf->type);
-		dng->put8(dng, sf->bytes);
-		assert(dng->extradata_pos + sf->bytes <= sizeof(dng->extradata));
-		memcpy(dng->extradata + dng->extradata_pos, dng->data + off, sf->bytes);
-		dng->extradata_pos += sf->bytes;
-	}
-	return;
-err:
-	fprintf(stderr, "Failed to read tag %d:%d\n", sf->ifd, sf->tag);
-	dng->err = 1;
 }
 
 void ljpeg_header(DNG *dng)

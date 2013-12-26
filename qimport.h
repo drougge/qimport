@@ -3,9 +3,15 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #define err1(v) if (v) goto err
 
+typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
 typedef uint8_t u8;
@@ -23,7 +29,10 @@ typedef void (*put8_f)(DNG *dng, u8 v);
 typedef void (*put16_f)(DNG *dng, u16 v);
 typedef void (*put32_f)(DNG *dng, u32 v);
 
+// The last two digits are not checked, they are for supposedly compatible
+// changes (that can later be reliable detected in written files).
 #define QIMPORT_ID "qimport 0 00 00"
+#define QIMPORT_ID_CHECKLEN (strlen(QIMPORT_ID) - 2)
 
 struct dng {
 	u8  *s;
@@ -62,9 +71,8 @@ void build_huff(DNG *dng);
 void dng_putc(DNG *dng, u8 c);
 void ljpeg_huff(DNG *dng);
 int decompress(const u8 *ljpeg, u32 ljpeg_size, u8 *dest, u32 dest_size, u16 width, u16 height);
-int dng_open_orig(DNG *dng, const char *fn);
+int dng_open_orig(DNG *dng, u8 *data, u32 size);
 int dng_open_imported(DNG *dng, const u8 *data, u32 size);
-void dng_extra(DNG *dng);
 void ljpeg_header(DNG *dng);
 void ljpeg_tail(DNG *dng);
 void dng_put8_data(DNG *dng, u8 v);
