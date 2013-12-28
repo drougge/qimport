@@ -2,6 +2,22 @@
 
 #include <libgen.h>
 #include <dirent.h>
+#include <stdarg.h>
+
+// Yes, I know, strerror. Not thread safe, I want threads later.
+// And strerror_r sucks more than this.
+static void perrorf(const char *fmt, ...)
+{
+	char *buf;
+	int e = errno;
+	va_list ap;
+	va_start(ap, fmt);
+	if (vasprintf(&buf, fmt, ap) < 0) exit(1);
+	va_end(ap);
+	errno = e;
+	perror(buf);
+	free(buf);
+}
 
 static int read_file(const char *fn, u8 **r_buf, u32 *r_size)
 {
@@ -27,14 +43,10 @@ static int read_file(const char *fn, u8 **r_buf, u32 *r_size)
 	*r_buf = res;
 	return 0;
 err:
-	{ // because C
-	char buf[strlen(fn) + strlen(msg)];
-	snprintf(buf, sizeof(buf), msg, fn);
-	perror(buf);
+	perrorf(msg, fn);
 	if (res) free(res);
 	if (fd >= 0) close(fd);
 	return 1;
-	}
 }
 
 static const char *progname;
@@ -80,10 +92,12 @@ static int save(char *filename, const u8 *data, const u32 data_size)
 	} else {
 		fh = fopen(destname, "wbx");
 	}
+	err1(!fh);
 	err1(fwrite(data, data_size, 1, fh) != 1);
 	fclose(fh);
 	return 0;
 err:
+	perrorf("Failed to save \"%s\"", filename);
 	if (fh) fclose(fh);
 	return 1;
 }
@@ -94,7 +108,9 @@ static int import(char *filename)
 	u8 *filedata = NULL;
 	u32 filedata_size;
 	u8 *dest = NULL;
+	const char *msg = NULL;
 	err1(read_file(filename, &filedata, &filedata_size));
+	msg = "Failed to parse \"%s\" as untouched DNG.\n";
 	err1(dng_open_orig(&dng, filedata, filedata_size));
 	dng.put8 = dng_putc;
 	dng.s = dng.data + dng.raw_pos;
@@ -119,21 +135,29 @@ static int import(char *filename)
 		dng_writetag(&dng, 1, 279, 4, image_size); // raw size
 	}
 	dng_writetag(&dng, 2, 273, 4, dng.raw_pos + image_size + dng.extradata_pos); // jpeg pos
+	msg = "Failed to compress \"%s\".\n";
 	err1(dng.err);
 	u32 dest_size = dng.raw_pos + image_size + dng.extradata_pos + dng.jpeg_size;
 	dest = malloc(dest_size);
-	err1(!dest);
+	if (!dest) {
+		perror("malloc");
+		msg = NULL;
+		goto err;
+	}
 	memcpy(dest, dng.data, dng.raw_pos);
 	memcpy(dest + dng.raw_pos, image_data, image_size);
 	memcpy(dest + dng.raw_pos + image_size, dng.extradata, dng.extradata_pos);
 	memcpy(dest + dng.raw_pos + image_size + dng.extradata_pos, dng.data + dng.jpeg_pos, dng.jpeg_size);
 	dng_close(&dng);
+	msg = "Internal error processing \"%s\".\n";
 	err1(dng_open_imported(&dng, dest, dest_size));
 	dng_close(&dng);
+	msg = NULL;
 	err1(save(filename, dest, dest_size));
 	free(dest);
 	return 0;
 err:
+	if (msg) fprintf(stderr, msg, filename);
 	if (dest) free(dest);
 	return 1;
 }
@@ -145,7 +169,10 @@ static int export(char *filename)
 	u32 filedata_size;
 	int ret = 1;
 	err1(read_file(filename, &filedata, &filedata_size));
-	err1(dng_open_imported(&dng, filedata, filedata_size));
+	if (dng_open_imported(&dng, filedata, filedata_size)) {
+		fprintf(stderr, "Failed to parse \"%s\" as %s-processed DNG.\n", filename, progname);
+		goto err;
+	}
 	ret = save(filename, dng.data, dng.size);
 	dng_close(&dng);
 err:
