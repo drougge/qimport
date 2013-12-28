@@ -69,7 +69,6 @@ void build_huff(DNG *dng)
 {
 	counts = dng->counts;
 	for (int i = 0; i <= BPS; i++) {
-		printf("%2d: %d\n", i, counts[i]);
 		huff[i] = i;
 	}
 	qsort(huff, BPS + 1, sizeof(*huff), huff_cmp);
