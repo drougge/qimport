@@ -3,6 +3,8 @@
 #include <libgen.h>
 #include <dirent.h>
 #include <stdarg.h>
+#include <time.h>
+#include <sys/time.h>
 
 // Yes, I know, strerror. Not thread safe, I want threads later.
 // And strerror_r sucks more than this.
@@ -81,7 +83,7 @@ static int is_dir(const char *pathname)
 static const char *destname;
 static int dest_is_dir;
 
-static int save(char *filename, const u8 *data, const u32 data_size)
+static int save(char *filename, const u8 *data, const u32 data_size, struct tm *tm)
 {
 	const char *fn_part = basename(filename);
 	char fn_buf[strlen(destname) + strlen(fn_part) + 2];
@@ -94,6 +96,13 @@ static int save(char *filename, const u8 *data, const u32 data_size)
 	fd = open(fn_buf, O_WRONLY | O_CREAT | O_EXCL, 0444);
 	err1(fd < 0);
 	err1(write(fd, data, data_size) != (ssize_t)data_size);
+	if (tm) {
+		struct timeval tv[2];
+		memset(tv, 0, sizeof(tv));
+		tv[0].tv_sec = time(NULL);
+		tv[1].tv_sec = mktime(tm);
+		futimes(fd, tv);
+	}
 	close(fd);
 	return 0;
 err:
@@ -151,9 +160,16 @@ static int import(char *filename)
 	dng_close(&dng);
 	msg = "Internal error processing \"%s\".\n";
 	err1(dng_open_imported(&dng, dest, dest_size));
+	u16 dummy;
+	u32 time_off = dng_readtag(&dng, 3, 0x9003, -1, &dummy);
+	err1(dng.err);
+	err1(time_off > dng.raw_pos);
+	struct tm tm;
+	memset(&tm, 0, sizeof(tm));
+	err1(!strptime((const char *)dng.data + time_off, "%Y:%m:%d %H:%M:%S", &tm));
 	dng_close(&dng);
 	msg = NULL;
-	err1(save(filename, dest, dest_size));
+	err1(save(filename, dest, dest_size, &tm));
 	free(dest);
 	return 0;
 err:
@@ -173,7 +189,7 @@ static int export(char *filename)
 		fprintf(stderr, "Failed to parse \"%s\" as %s-processed DNG.\n", filename, progname);
 		goto err;
 	}
-	ret = save(filename, dng.data, dng.size);
+	ret = save(filename, dng.data, dng.size, NULL);
 	dng_close(&dng);
 err:
 	return ret;
