@@ -381,6 +381,7 @@ void ljpeg_header(DNG *dng)
 
 void ljpeg_tail(DNG *dng)
 {
+	while (dng->out_bitcnt) emit_bit(dng, 0);
 	dng_putc(dng, 0xff);
 	dng_putc(dng, 0xd9);
 }

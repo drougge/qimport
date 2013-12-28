@@ -105,7 +105,6 @@ static int import(char *filename)
 	dng.s = dng.data + dng.raw_pos;
 	dng.emit = emit_data;
 	compress_loop(&dng);
-	while (dng.out_bits) emit_bit(&dng, 0);
 	ljpeg_tail(&dng);
 	const u8 *image_data;
 	u32 image_size;
