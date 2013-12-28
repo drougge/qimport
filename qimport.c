@@ -83,22 +83,22 @@ static int dest_is_dir;
 
 static int save(char *filename, const u8 *data, const u32 data_size)
 {
-	FILE *fh;
+	const char *fn_part = basename(filename);
+	char fn_buf[strlen(destname) + strlen(fn_part) + 2];
+	int fd = -1;
 	if (dest_is_dir) {
-		const char *fn_part = basename(filename);
-		char fn_buf[strlen(destname) + strlen(fn_part) + 2];
 		snprintf(fn_buf, sizeof(fn_buf), "%s/%s", destname, fn_part);
-		fh = fopen(fn_buf, "wbx");
 	} else {
-		fh = fopen(destname, "wbx");
+		strcpy(fn_buf, destname);
 	}
-	err1(!fh);
-	err1(fwrite(data, data_size, 1, fh) != 1);
-	fclose(fh);
+	fd = open(fn_buf, O_WRONLY | O_CREAT | O_EXCL, 0444);
+	err1(fd < 0);
+	err1(write(fd, data, data_size) != (ssize_t)data_size);
+	close(fd);
 	return 0;
 err:
-	perrorf("Failed to save \"%s\"", filename);
-	if (fh) fclose(fh);
+	perrorf("Failed to save \"%s\"", fn_buf);
+	if (fd >= 0) close(fd);
 	return 1;
 }
 
