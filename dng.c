@@ -251,6 +251,9 @@ SAVEFIELD savefields[] = {
 	{3, 0x920a, 5, 8}, // FL
 	{3, 0xa405, 3, 2}, // FL135
 	{0, 0x0112, 3, 2}, // Orientation
+	{1, 0xc68d, 4, 16}, // ActiveArea
+	{1, 0xc61f, 4, 8}, // DefaultCropOrigin
+	{1, 0xc620, 4, 8}, // DefaultCropSize
 };
 
 static int dng_extra(DNG *dng)

@@ -31,15 +31,15 @@ typedef void (*put16_f)(DNG *dng, u16 v);
 typedef void (*put32_f)(DNG *dng, u32 v);
 
 // The last two digits are not checked, they are for supposedly compatible
-// changes (that can later be reliable detected in written files).
-#define QIMPORT_ID "qimport 0 00 00"
+// changes (that can later be reliably detected in written files).
+#define QIMPORT_ID "qimport 0 00 01"
 #define QIMPORT_ID_CHECKLEN (strlen(QIMPORT_ID) - 2)
 
 struct dng {
 	u8  *s;
 	u8  *data;
 	u8  *outdata;
-	u8  extradata[112];
+	u8  extradata[160];
 	u32 outdata_size, outdata_pos;
 	u32 extradata_pos;
 	int err;
