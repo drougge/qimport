@@ -167,6 +167,7 @@ static int import(char *filename)
 	struct tm tm;
 	memset(&tm, 0, sizeof(tm));
 	err1(!strptime((const char *)dng.data + time_off, "%Y:%m:%d %H:%M:%S", &tm));
+	tm.tm_isdst = -1;
 	dng_close(&dng);
 	msg = NULL;
 	err1(save(filename, dest, dest_size, &tm));
