@@ -206,7 +206,7 @@ static int dng_open_common(DNG *dng)
 		dng->get32 = le_get32;
 		dng->put16 = le_put16;
 		dng->put32 = le_put32;
-	} else if (memcmp(dng->data, "MM\0*", 4)) {
+	} else if (!memcmp(dng->data, "MM\0*", 4)) {
 		dng->get16 = be_get16;
 		dng->get32 = be_get32;
 		dng->put16 = be_put16;
